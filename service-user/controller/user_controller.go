@@ -1,89 +1,112 @@
 package controller
 
 import (
-	"context"
 	"errors"
+	"gorm.io/gorm"
 	"service-user/helpers"
 	"service-user/model"
+	"strings"
 
 	"service-user/config"
-
+	
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 type WebResponse struct {
-	Code int
+	Code   int
 	Status string
-	Data interface{}
+	Data   interface{}
 }
 
 func Register(c *fiber.Ctx) error {
+
+	db := config.GetDB()
 	var requestBody model.User
-	db := config.GetMongoDatabase().Collection("user")
-
-	requestBody.Id = uuid.New().String()
-
-	ctx, cancel := config.NewMongoContext()
-	defer cancel()
 
 	c.BodyParser(&requestBody)
 
-	_, err := db.InsertOne(ctx, bson.M{
-		"email": requestBody.Email,
-		"password": helpers.HashPassword([]byte(requestBody.Password)),
-	})
+	hashedPassword := helpers.HashPassword([]byte(requestBody.Password))
 
-	if err != nil {
-		panic(err)
+	requestBody.Password = hashedPassword
+
+	result := db.Create(&requestBody)
+
+	if result.Error != nil {
+		if strings.Contains(result.Error.Error(), "uni_users_email") {
+			return c.Status(400).JSON(WebResponse{
+				Code:   400,
+				Status: "BAD_REQUEST",
+				Data:   "User already exists",
+			})
+		} else {
+			return c.Status(500).JSON(WebResponse{
+				Code:   500,
+				Status: "BAD_REQUEST",
+				Data:   result.Error.Error(),
+			})
+		}
 	}
 
-	return c.JSON(WebResponse{
-		Code: 201,
-		Status: "OK",
-		Data: requestBody.Email,
+	access_token := helpers.SignToken(requestBody.Email)
+
+	return c.JSON(struct {
+		Code        int
+		Status      string
+		AccessToken string
+		Data        interface{}
+	}{
+		Code:        200,
+		Status:      "OK",
+		AccessToken: access_token,
+		Data:        requestBody,
 	})
 }
 
 func Login(c *fiber.Ctx) error {
-	db := config.GetMongoDatabase().Collection("user")
+	db := config.GetDB()
 
 	var requestBody model.User
-	var result model.User
- 
+
 	c.BodyParser(&requestBody)
 
-	err := db.FindOne(context.TODO(), bson.D{{"email", requestBody.Email}}).Decode(&result)
-	if err != nil {
-		return c.JSON(WebResponse{
-			Code: 401,
+	var user model.User
+	result := db.Where("email = ?", requestBody.Email).First(&user)
+
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return c.Status(401).JSON(WebResponse{
+			Code:   401,
 			Status: "BAD_REQUEST",
-			Data: err.Error(),
+			Data:   "User not found",
+		})
+	} else if result.Error != nil {
+		return c.Status(500).JSON(WebResponse{ // Unexpected database error
+			Code:   500,
+			Status: "BAD_REQUEST",
+			Data:   result.Error.Error(),
 		})
 	}
 
-	checkPassword := helpers.ComparePassword([]byte(result.Password), []byte(requestBody.Password))
+	checkPassword := helpers.ComparePassword([]byte(user.Password), []byte(requestBody.Password))
 	if !checkPassword {
 		return c.JSON(WebResponse{
-			Code: 401,
+			Code:   401,
 			Status: "BAD_REQUEST",
-			Data: errors.New("invalid password").Error(),
+			Data:   errors.New("invalid password").Error(),
 		})
 	}
 
 	access_token := helpers.SignToken(requestBody.Email)
 
-	return c.JSON(struct{
-		Code int 
-		Status string
+	return c.JSON(struct {
+		Code        int
+		Status      string
 		AccessToken string
-		Data interface{}
+		Data        interface{}
 	}{
-		Code: 200,
-		Status: "OK",
+		Code:        200,
+		Status:      "OK",
 		AccessToken: access_token,
-		Data: result,
+		Data:        user,
 	})
 }
 

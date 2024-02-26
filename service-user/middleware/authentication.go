@@ -1,14 +1,14 @@
 package middleware
 
 import (
-	"context"
+	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"service-user/config"
 	"service-user/helpers"
 	"service-user/model"
 
 	"github.com/gofiber/fiber/v2"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 func Authentication(c *fiber.Ctx) error {
@@ -24,15 +24,18 @@ func Authentication(c *fiber.Ctx) error {
 		return c.Status(401).SendString("Invalid token: Failed to verify token")
 	}
 
-	fmt.Println(checkToken, "CEKKKK" ,checkToken["email"])
+	email := checkToken["email"].(string)
+
+	db := config.GetDB()
 
 	var user model.User
-	db := config.GetMongoDatabase().Collection("user")
+	result := db.Where("email = ?", email).First(&user)
 
-	err = db.FindOne(context.TODO(), bson.D{{"email", checkToken["email"]}}).Decode(&user)
-	if err != nil {
-		fmt.Println(err, "Error fetching user from database")
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 		return c.Status(401).SendString("Invalid token: User not found")
+	} else if result.Error != nil {
+		fmt.Println(err, "Error fetching user from database")
+		return c.Status(500).SendString("Internal server error")
 	}
 
 	// Set user data in context for future use

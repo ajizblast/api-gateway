@@ -2,16 +2,11 @@ package main
 
 import (
 	"fmt"
-	"service-user/config"
 	"service-user/controller"
 	"service-user/middleware"
 
 	"github.com/gofiber/fiber/v2"
 )
-
-func init() {
-	config.GetMongoDatabase()
-}
 
 func main() {
 	app := fiber.New()
